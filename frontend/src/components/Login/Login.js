@@ -6,7 +6,8 @@ export default class Login extends Component{
         e.preventDefault();
         const data = {
             username: this.username,
-            code: "1357"
+            password: this.password
+         
         }
         console.log(data);
         axios.post('/login', data).then(
