@@ -1,40 +1,27 @@
 package main
 
 import (
-	"Web_project/model"
-	"Web_project/util"
+	"backend/Web_project/model"
+	"backend/Web_project/util"
 	"encoding/json"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
+	"github.com/gobuffalo/uuid"
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
+	"io"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 )
-var jwtKey = []byte("my_secret_key")
-var signinTokens []string
-var signupTokens [] string
-var users = map[string]string{
-	"user1": "password1",
-	"user2": "password2",
-}
-type Credentials struct {
-	Password string `json:"password"`
-	Username string `json:"username"`
-}
 
-//
-type Claims struct {
-	Username string `json:"username"`
-	jwt.StandardClaims
-}
 var db = util.Initializedatabase()
 var port = "8080"
 var dbSessions = map[string]model.Session{} // session ID, session
 const sessionLength int = 5*60*60
 
 func main() {
-	//defer db.Close()
+	defer db.Close()
 	fmt.Println("Server Starts Successfully !")
 	handleRequests()
 }
@@ -42,10 +29,26 @@ func main() {
 
 func handleRequests() {
 	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/api/signup", signup)
-	router.HandleFunc("/api/signin", signin)
-	router.HandleFunc("/api/updateprofile", authorized(updateprofile))
-	router.HandleFunc("/api/searchuser", authorized(searchuser))
+	router.HandleFunc("/register", signup)
+	router.HandleFunc("/login", signin)
+	//router.HandleFunc("/updateprofile", authorized(updateprofile))
+	router.HandleFunc("/updateprofile", updateprofile)
+	//router.HandleFunc("/api/searchuser", authorized(searchuser))
+	router.HandleFunc("/searchuser", searchuser)
+	router.HandleFunc("/api/createlist", authorized(createlist))
+	//router.HandleFunc("/api/additemtolist", authorized(additemtolist))
+	router.HandleFunc("/additemtolist", additemtolist)
+	//router.HandleFunc("/api/addfriend", authorized(addfriend))
+	router.HandleFunc("/addfriend", addfriend)
+	//router.HandleFunc("/api/buygift", authorized(buygift))
+	router.HandleFunc("/buygift", buygift)
+	//router.HandleFunc("/api/getlist", authorized(getList))
+	router.HandleFunc("/getlist", getList)
+	//router.HandleFunc("/api/getlistitem", authorized(getListItem))
+	router.HandleFunc("/getlistitem", getListItem)
+	//router.HandleFunc("/api/getitemdetail", authorized(getListItem))
+	router.HandleFunc("/getitemdetail", getitemdetail)
+
 	http.ListenAndServe(":"+port, router)
 }
 
@@ -82,29 +85,15 @@ func authorized(h http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-
+func getHash(pwd []byte) string {
+	hash, err := bcrypt.GenerateFromPassword(pwd, bcrypt.MinCost)
+	if err != nil {
+		log.Println(err)
+	}
+	return string(hash)
+}
 func signup(w http.ResponseWriter, req *http.Request) {
 
-	var creds Credentials
-
-	expiration_time := time.Now().Add(60 * time.Minute)
-	claims := &Claims{
-		Username: creds.Username,
-		StandardClaims : jwt.StandardClaims{
-			ExpiresAt: expiration_time.Unix(),
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(jwtKey)
-	fmt.Printf(tokenString)
-
-
-	signupTokens = append(signupTokens, tokenString)
-
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
 
 	if alreadyLoggedIn(w, req) {
 		w.WriteHeader(http.StatusSeeOther)
@@ -113,20 +102,35 @@ func signup(w http.ResponseWriter, req *http.Request) {
 
 	// process form submission
 	if req.Method == http.MethodPost {
-		// get form values
-		username := req.FormValue("username")
-		firstname := req.FormValue("firstname")
-		lastname := req.FormValue("lastname")
-		password := req.FormValue("password")
+		//get json values
+		out := make([]byte,1024)
 
+		bodyLen, err := req.Body.Read(out)
 
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.User
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		fmt.Println(k.UserName)
+		fmt.Println(k.FirstName)
+		fmt.Println(k.LastName)
+		fmt.Println(k.Password)
 		//null value
-		if username=="" || firstname=="" || lastname=="" || password=="" {
+		if k.UserName=="" || k.FirstName=="" || k.LastName=="" || k.Password=="" {
 			http.Error(w, "Please fill all the variables", http.StatusSeeOther)
 			return
 		}
 		// username taken?
-		user,ok,err:=util.GetUserFromdbByUsername(db,username)
+		user,ok,err:=util.GetUserFromdbByUsername(db,k.UserName)
 		if ok&&(user.UserName!="") {
 			http.Error(w, "Username already taken", http.StatusForbidden)
 			return
@@ -137,27 +141,26 @@ func signup(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		// create session
-		//sID, _ := uuid.NewV4()
-		//cookie := &http.Cookie{
-		//	Name:  "session",
-		//	Value: sID.String(),
-		//}
-		//cookie.MaxAge = sessionLength
-		//http.SetCookie(w, cookie)
-		//dbSessions[cookie.Value] = model.Session{username, time.Now()}
+		sID, _ := uuid.NewV4()
+		cookie := &http.Cookie{
+			Name:  "session",
+			Value: sID.String(),
+		}
+		cookie.MaxAge = sessionLength
+		http.SetCookie(w, cookie)
+		dbSessions[cookie.Value] = model.Session{k.UserName, time.Now()}
 		// store user in dbUsers
-		bs, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+		bs, err := bcrypt.GenerateFromPassword([]byte(k.Password), bcrypt.MinCost)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 		user = model.User{
-			UserName:username,
+			UserName:k.UserName,
 			Password:string(bs),
-			FirstName:firstname,
-			LastName:lastname,
+			FirstName:k.FirstName,
+			LastName:k.LastName,
 		}
-
 
 		err = util.InsertNewUserIntodb(db,user)
 		if err!=nil {
@@ -171,38 +174,36 @@ func signup(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+
 func signin(w http.ResponseWriter, req *http.Request) {
-	var creds Credentials
-	//creat token with 1 hour expiration time
-	expiration_time := time.Now().Add(60 * time.Minute)
-	claims := &Claims{
-		Username: creds.Username,
-		StandardClaims : jwt.StandardClaims{
-			ExpiresAt: expiration_time.Unix(),
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(jwtKey)
-	fmt.Printf(tokenString)
-
-
-	signinTokens = append(signinTokens, tokenString)
-
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	if alreadyLoggedIn(w, req) {
 		w.WriteHeader(http.StatusSeeOther)
 		return
 	}
 	// process form submission
 	if req.Method == http.MethodPost {
-		username := req.FormValue("username")
-		password := req.FormValue("password")
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.User
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+
+		fmt.Println(k.UserName)
+		fmt.Println(k.Password)
 		// is there a username?
-		user,ok,err := util.GetUserFromdbByUsername(db,username)
+		user,ok,err := util.GetUserFromdbByUsername(db,k.UserName)
 
 		if err!=nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -215,33 +216,22 @@ func signin(w http.ResponseWriter, req *http.Request) {
 		}
 		// does the entered password match the stored password?
 
-		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(k.Password))
 		if err != nil {
 			http.Error(w, "Username and/or password do not match", http.StatusForbidden)
 			return
 		}
-
-		if err != nil {
-			// If there is an error in creating the JWT return an internal server error
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		// create session
+		sID, _ := uuid.NewV4()
+		cookie := &http.Cookie{
+			Name:  "session",
+			Value: sID.String(),
 		}
-		//http.SetCookie(w, &http.Cookie{
-		//	Name:    "token",
-		//	Value:   tokenString,
-		//	Expires: expiration_time,
-		//})
+		cookie.MaxAge = sessionLength
+		http.SetCookie(w, cookie)
+		dbSessions[cookie.Value] = model.Session{k.UserName, time.Now()}
+		w.WriteHeader(http.StatusOK)
 
-			// create session
-		//sID, _ := uuid.NewV4()
-		//cookie := &http.Cookie{
-		//	Name:  "session",
-		//	Value: sID.String(),
-		//}
-		//cookie.MaxAge = sess	ionLength
-		//http.SetCookie(w, cookie)
-		//dbSessions[cookie.Value] = model.Session{username, time.Now()}
-		//w.WriteHeader(http.StatusOK)
 	}else {
 		w.WriteHeader(http.StatusBadRequest)
 	}
@@ -253,10 +243,25 @@ func updateprofile(w http.ResponseWriter, req *http.Request) {
 
 	// process form submission
 	if req.Method == http.MethodPut {
-		firstname := req.FormValue("firstname")
-		lastname := req.FormValue("lastname")
-		password := req.FormValue("password")
-		repassword := req.FormValue("repassword")
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.UserUpdate
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+
+
 		cookie, err := req.Cookie("session")
 		if err != nil {
 			w.WriteHeader(http.StatusSeeOther)
@@ -268,9 +273,9 @@ func updateprofile(w http.ResponseWriter, req *http.Request) {
 			dbSessions[cookie.Value] = session
 		}
 		var repass bool
-		if password!="" && repassword!="" {
+		if k.Password!="" && k.RePassword!="" {
 			user,_,err:=util.GetUserFromdbByUsername(db,session.Un)
-			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(k.Password))
 			if err != nil {
 				http.Error(w, "Password is not correct", http.StatusForbidden)
 				repass = false
@@ -281,19 +286,19 @@ func updateprofile(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if repass {
-			bs, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+			bs, err := bcrypt.GenerateFromPassword([]byte(k.Password), bcrypt.MinCost)
 			if err != nil {
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
-			err = util.UpdateProfile(db,session.Un,firstname,lastname,string(bs))
+			err = util.UpdateProfile(db,session.Un,k.FirstName,k.LastName,string(bs))
 			if err != nil {
 
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 		}else {
-			err := util.UpdateProfile(db,session.Un,firstname,lastname,"")
+			err := util.UpdateProfile(db,session.Un,k.FirstName,k.LastName,"")
 			if err != nil {
 
 				w.WriteHeader(http.StatusInternalServerError)
@@ -312,8 +317,25 @@ func updateprofile(w http.ResponseWriter, req *http.Request) {
 func searchuser(w http.ResponseWriter, req *http.Request)  {
 
 	if req.Method == http.MethodGet {
-		username := req.FormValue("username")
-		results,err := util.SearchUser(db,username)
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.User
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+
+		results,err := util.SearchUser(db,k.UserName)
 		if err!=nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -325,3 +347,307 @@ func searchuser(w http.ResponseWriter, req *http.Request)  {
 	}
 }
 
+func createlist(w http.ResponseWriter, req *http.Request)  {
+	cookie, err := req.Cookie("session")
+	if err != nil {
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
+
+	session, ok := dbSessions[cookie.Value]
+	if ok {
+		session.LastActivity = time.Now()
+		dbSessions[cookie.Value] = session
+	}
+
+	err = util.CreateNewList(db,session.Un)
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func additemtolist(w http.ResponseWriter, req *http.Request)  {
+	if req.Method == http.MethodPost {
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.ListItem
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		cookie, err := req.Cookie("session")
+		if err != nil {
+			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
+
+		session, ok := dbSessions[cookie.Value]
+		if ok {
+			session.LastActivity = time.Now()
+			dbSessions[cookie.Value] = session
+		}
+
+		listid_int, err := strconv.Atoi(string(k.Listid))
+		if err != nil {
+			http.Error(w, "listid value is not valid", http.StatusBadRequest)
+			return
+		}
+
+		itemid_int, err := strconv.Atoi(string(k.ItemId))
+		if err != nil {
+			http.Error(w, "itemid value is not valid", http.StatusBadRequest)
+			return
+		}
+
+		err = util.AddItemTolist(db,listid_int,itemid_int,session.Un)
+
+		if err!=nil {
+			http.Error(w, err.Error(), http.StatusSeeOther)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}else {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+}
+
+func addfriend(w http.ResponseWriter, req *http.Request)  {
+	out := make([]byte,1024)
+
+	bodyLen, err := req.Body.Read(out)
+
+	if err != io.EOF {
+		fmt.Println(err.Error())
+		w.Write([]byte("{error:" + err.Error() + "}"))
+		return
+	}
+	var k model.UserFriend
+
+
+	err = json.Unmarshal(out[:bodyLen],&k)
+
+	if err != nil {
+		w.Write([]byte("{error:" + err.Error() + "}"))
+		return
+	}
+	cookie, err := req.Cookie("session")
+	if err != nil {
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
+
+	session, ok := dbSessions[cookie.Value]
+	if ok {
+		session.LastActivity = time.Now()
+		dbSessions[cookie.Value] = session
+	}
+
+	if k.Friend==session.Un {
+		http.Error(w, err.Error(), http.StatusSeeOther)
+		return
+	}
+	err = util.AddFriend(db,session.Un,k.Friend)
+
+	if err!=nil {
+		http.Error(w, err.Error(), http.StatusSeeOther)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+
+func buygift(w http.ResponseWriter, req *http.Request)  {
+	out := make([]byte,1024)
+
+	bodyLen, err := req.Body.Read(out)
+
+	if err != io.EOF {
+		fmt.Println(err.Error())
+		w.Write([]byte("{error:" + err.Error() + "}"))
+		return
+	}
+	var k model.Item
+
+
+	err = json.Unmarshal(out[:bodyLen],&k)
+
+	if err != nil {
+		w.Write([]byte("{error:" + err.Error() + "}"))
+		return
+	}
+
+	cookie, err := req.Cookie("session")
+	if err != nil {
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
+
+	session, ok := dbSessions[cookie.Value]
+	if ok {
+		session.LastActivity = time.Now()
+		dbSessions[cookie.Value] = session
+	}
+
+
+	id_int, err := strconv.Atoi(string(k.Id))
+	if err != nil {
+		http.Error(w, "id value is not valid", http.StatusBadRequest)
+		return
+	}
+
+	err=util.BuyGift(db,id_int,session.Un)
+
+	if err!=nil {
+		http.Error(w, err.Error(), http.StatusSeeOther)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func getList(w http.ResponseWriter, req *http.Request)  {
+
+	if req.Method == http.MethodGet{
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.User
+
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		cookie, err := req.Cookie("session")
+		if err != nil {
+			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
+
+		session, ok := dbSessions[cookie.Value]
+		if ok {
+			session.LastActivity = time.Now()
+			dbSessions[cookie.Value] = session
+		}
+		lists,err := util.GetList(db,k.UserName)
+		json.NewEncoder(w).Encode(lists)
+	}else {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+}
+
+func getListItem(w http.ResponseWriter, req *http.Request)  {
+
+	if req.Method == http.MethodGet{
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.ListItem
+
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+
+
+		listid_int, err := strconv.Atoi(string(k.Listid))
+
+		if err != nil {
+			http.Error(w, "id value is not valid", http.StatusBadRequest)
+			return
+		}
+
+		cookie, err := req.Cookie("session")
+		if err != nil {
+			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
+
+		session, ok := dbSessions[cookie.Value]
+		if ok {
+			session.LastActivity = time.Now()
+			dbSessions[cookie.Value] = session
+		}
+		lists,err := util.GetListItem(db,listid_int)
+		if err!=nil {
+			http.Error(w, err.Error(), http.StatusSeeOther)
+			return
+		}
+		json.NewEncoder(w).Encode(lists)
+	}else {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+
+}
+
+func getitemdetail(w http.ResponseWriter, req *http.Request)  {
+
+	if req.Method == http.MethodGet{
+		out := make([]byte,1024)
+
+		bodyLen, err := req.Body.Read(out)
+
+		if err != io.EOF {
+			fmt.Println(err.Error())
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+		var k model.Item
+
+
+		err = json.Unmarshal(out[:bodyLen],&k)
+			
+		if err != nil {
+			w.Write([]byte("{error:" + err.Error() + "}"))
+			return
+		}
+
+
+		itemid_int, err := strconv.Atoi(string(k.Id))
+		if err != nil {
+
+			http.Error(w, "id value is not valid", http.StatusBadRequest)
+			return
+		}
+
+		item,err:=util.GetItemDetail(db,itemid_int)
+		if err!=nil {
+			http.Error(w, err.Error(), http.StatusSeeOther)
+			return
+		}
+		json.NewEncoder(w).Encode(item)
+	}
+}

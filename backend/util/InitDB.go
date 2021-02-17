@@ -7,7 +7,7 @@ import (
 )
 
 func Initializedatabase()*sql.DB  {
-	db, err := sql.Open("mysql", "root:@tcp(127.0.0.1:3306)/web_project")
+	db, err := sql.Open("mysql", "root:root@tcp(localhost:3306)/web_project")
 	if err != nil {
 		log.Print(err.Error())
 	}

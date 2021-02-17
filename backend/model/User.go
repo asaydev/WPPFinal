@@ -6,5 +6,16 @@ type User struct {
 	FirstName string `json:"firstname"`
 	LastName string `json:"lastname"`
 	Password string `json:"password"`
-	AcessToken string `json:"access_token"`
 }
+
+type UserUpdate struct {
+	FirstName string `json:"firstname"`
+	LastName string `json:"lastname"`
+	Password string `json:"password"`
+	RePassword string `json:"repassword"`
+}
+type UserFriend struct {
+	Friend string `json:"friend"`
+}
+
+
